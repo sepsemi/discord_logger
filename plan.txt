@@ -1,0 +1,22 @@
+Create a multi token discord logger
+
+First we need to create the libary:
+	We need to register clients.
+	We pass the libary a token or a set of tokens and register them as clients.
+	Then we connect each client to the websocket and give them a id.
+	If the client dies we try and reconnect them.
+	
+	What we should not do:
+		We should not take away controll from the end user.
+		We should be pretty verbose in our logs incase anything bugs out..
+
+Secondly we create the logger:
+	We need to create on_ methods to register as methods such as on_message.
+	Since the lib looks for on_ events example is on_ready(), which indicates a client readiness for reading
+	We can but should not handle client reconnects and disconnects we should but are not require to give that controll to the libary.
+	
+Libary Client structure:
+	
+	i(loop, token):
+		registers a client for a id and task
+	    
