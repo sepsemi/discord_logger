@@ -18,18 +18,19 @@ class Client:
         self.max_reconnects = max_reconnects
         self._reconnects = 0
 
-        # Stuff
+        # Instantiate the state manager
         self._connection = ConnectionState(
             dispatch = self.dispatch,
             http = None,
             loop = self.loop
-        )
+        ) 
 
     async def _run_event(self, coro, event_name, *args, **kwargs):
         await coro(*args, **kwargs)
 
     def _schedule_event(self, coro, event_name, *args, **kwargs):
         wrapped = self._run_event(coro, event_name, *args, **kwargs)
+        
         # Schedules the task
         return asyncio.create_task(wrapped, name = event_name)
 
@@ -45,11 +46,18 @@ class Client:
         ws_params = {
             'initial': True
         } 
+        
+        # Add the id to State
+        self._connection.id = self.id
+
         while not self._reconnects == self.max_reconnects:
             ws = DiscordWebsocket(client = self, loop = self.loop)
             
             # Run forever untill reconnect
-            await ws.long_poll()
+            try:
+                await ws.long_poll()
+            except asyncio.exceptions.TimeoutError:
+                logging.warn('Internet connection lost')
 
             # Connection was reset
             self._reconnects +=1

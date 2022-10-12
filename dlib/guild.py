@@ -1,3 +1,12 @@
+from .channel import TextChannel
+
+print(__name__)
+
+def factory_channel(channel_type, channel):
+    if channel_type == 0:
+        # Guild channel
+        return None
+
 class Guild:
     
     def __init__(self, state, data):
@@ -17,5 +26,12 @@ class Guild:
         self._discovery_splash = data['discovery_splash']
         self.owner_id = int(data['owner_id'])
     
-        for channel in data['channels']:
-            pass
+        # The only channel types we care about are (0, 2, 4, 5, 11, 13, 14, 15)
+        for channel_data in data['channels']:
+            if channel_data['type'] == 0:
+                channel = TextChannel(state, self, channel_data)
+                # Fast lookups
+                self.channels[channel.id] = channel
+
+    def __str__(self):
+        return self.name

@@ -1,8 +1,11 @@
+import logging
+
 from .user import ClientUser, User
 from .channel import DMChannel, PrivateChannel
 from .guild import Guild
 from .message import Message
 
+_log = logging.getLogger(__name__)
 
 class ConnectionState:
 
@@ -49,8 +52,8 @@ class ConnectionState:
         channel_id = int(data['channel_id'])
         try:
             guild_id = guild_id or int(data['guild_id'])
-            guild = None
-            channel = None
+            guild = self._guilds[guild_id]
+            channel = guild.channels[channel_id]
             #guild = self._get_guild(guild_id)
 
         except KeyError:
@@ -63,6 +66,7 @@ class ConnectionState:
         self.user = ClientUser(state=self, data=data['user'])
 
         # add all the users
+
         for user in data['users']:
             self.store_user(user)
 
@@ -80,8 +84,12 @@ class ConnectionState:
         message = Message(state=self, data=data, channel=channel)
 
         user_id = message.author.id
+
         if user_id not in self._users.keys():
-            print('found new user')
+            _log.debug('[{}] new user: {}, {}'.format(self.id, message.author.id, message.author))
+
+            # Append user to the user store because we can't fetch the (easily)
+            self.store_user(data['author'])
 
         self.dispatch('message', message)
 

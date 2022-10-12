@@ -1,7 +1,67 @@
 import json
 import zlib
+import time
+import logging
 import asyncio
+import threading
 import websockets
+
+_log = logging.getLogger(__name__)
+
+class AsyncKeepaliveHandler:
+    WINDOW = 2.0
+
+    def __init__(self, websocket, interval, socket):
+        self.open = False
+        self.websocket = websocket
+        self.interval = interval
+        self.socket = socket
+
+        # Predefined messages
+        self.msg = '[%s] keepalive: heartbeat send, sequence=%s'
+        self.behind_msg = '[%s] keealive: Gateway acknowledged late %.1fs behind'
+
+        # Metric data
+        timestamp = time.perf_counter()
+        self.last_send = timestamp
+        self.last_ack = timestamp
+        self.last_recv = timestamp
+        self.latency = float('inf')
+
+    def ack(self):
+        ack_time = time.perf_counter()
+        self.last_ack = ack_time
+        self.latency = ack_time - self.last_send
+
+        if self.latency > 10:
+            _log.warn(self.behind_msg % (self.websocket.id, self.latency))
+        else:
+            _log.info(self.msg % (self.websocket.id, self.websocket.sequence))
+
+    def tick(self):
+        self._last_recv = time.perf_counter()
+
+    def get_payload(self):
+        return {
+            'op': self.websocket.HEARTBEAT,
+            'd': self.websocket.sequence
+        }
+
+    async def run(self):
+        self.open = True
+
+        while self.open:
+            payload = self.get_payload()
+            
+            # Send the payload to the websocket and quit if timeout
+            try:
+                await asyncio.wait_for(self.socket.send(json.dumps(payload)), timeout=self.WINDOW)
+                self.last_send = time.perf_counter()
+            except asyncio.excetions.TimeoutError:
+                _log.warn('[{}] keepalive: timeout on send, ignored for now'.format(self.id))
+                break;
+
+            await asyncio.sleep(self.interval - self.WINDOW)
 
 class DiscordWebsocket:
     DISPATCH = 0
@@ -36,7 +96,7 @@ class DiscordWebsocket:
         self._buffer = bytearray()
         self._close_code = None
 
-    async def received_message(self, websocket, msg):
+    async def received_message(self, socket, msg):
         if type(msg) is bytes:
             self._buffer.extend(msg)
             if len(msg) < 4 or msg[-4:] != b'\x00\x00\xff\xff':
@@ -48,50 +108,86 @@ class DiscordWebsocket:
             self._buffer = bytearray()
 
         msg = json.loads(msg)
+        
+        event = msg['t'] if 't' in msg.keys() else None
 
         op = msg['op'] if 'op' in msg.keys() else None
         data = msg['d'] if 'd' in msg.keys() else None
         seq = msg['s'] if 's' in msg.keys() else None
-        event = msg['t'] if 't' in msg.keys() else None
         
+        if seq is not None:
+            self.sequence = seq
+ 
         if op != self.DISPATCH:
             if op == self.RECONNECT:
-                return None
+                _log.debug('[{}] gateway: Asked for reconnect'.format(self.id))
 
-            if op == self.HEARTBEAT_ACK:
-                return None
+            if op == self.HEARTBEAT_ACK:            
+                self._keep_alive.ack()
 
             if op == self.HEARTBEAT:
-                return None
-
+                await self._keepalive_handler.send_heartbeat(self.id)    
+                _log.debug('[{}] gateway: Request forcefull hearbeat send'.format(self.id))
+            
             if op == self.HELLO:
                 interval = data['heartbeat_interval'] / 1000.0
                 self.ws_timeout = interval
 
-                self._keep_alive = None
-
                 # Send identify
-                await self.identify(websocket)
-
-                # Send a heartbeat immediatly
-                return None
+                await self.identify(socket)
+                 
+                self._keep_alive = AsyncKeepaliveHandler(websocket=self, interval=interval, socket=socket)
+                self.loop.create_task(self._keep_alive.run())
         
         if event == 'READY':
             #print('client {} ready.'.format(self.id))
-            await self.change_presence(websocket)
+            #await self.change_presence(socket)
+            await self.update_presence(socket)
 
         elif event == 'RESUMED':
-            return None
+            _log.debug('[{}] gateway: has resumed'.format(self.id))
 
         try:
             func = self._discord_parsers[event]
         except KeyError:
-            # Unknown event
-            return None
+            if event is not None:
+                _log.debug('[{}] gateway: unsubscribed event seq={}, event={}'.format(self.id, seq, event)) 
         else:
             func(data)
 
-    async def change_presence(self, websocket):
+    async def update_presence(self, socket):
+        # The current time in miliseconds (Not precice)
+        timestamp = int(time.time() * 1000 + 0.1)
+        # Create an elapsed timestamp for exmaple "20 minutes"
+        elapsed = timestamp -  1200 * 1000 
+
+        payload = {
+            'op': self.PRESENCE,
+            'd': {
+                'status': 'online',
+                'since': 0,
+                'activities': [
+                    {
+                        'name': 'Custom Status',
+                        'type': 4,
+                        'state': 'Hopelessly Devoted to You',
+                        'emoji': None
+                    },
+                    {   
+                        'name': 'Hearts of Iron IV',
+                        'type': 0,
+                        'application_id': 358421669603311616,
+                        'timestamps': {
+                            'start': elapsed
+                        }
+                    }
+                ],
+                'afk': False
+            }
+        }
+        await socket.send(json.dumps(payload))
+
+    async def change_presence(self, socket):
         # Just here to exist and fake change_presence
         payload = {
             'op': 3,
@@ -109,9 +205,9 @@ class DiscordWebsocket:
                 'afk': False
             }
         }
-        await websocket.send(json.dumps(payload))
+        await socket.send(json.dumps(payload))
 
-    async def identify(self, websocket):
+    async def identify(self, socket):
         # This is highly unreliable
         payload = {
             'op': self.IDENTIFY,
@@ -154,7 +250,8 @@ class DiscordWebsocket:
             'activities': [],
             'afk': False
         }
-        await websocket.send(json.dumps(payload))
+
+        await socket.send(json.dumps(payload))
 
     async def long_poll(self, resume = False):
         size = 1024 * 1024 * 2.5
@@ -163,12 +260,15 @@ class DiscordWebsocket:
             'read_limit': size,
             'write_limit': size
         }
-        async with websockets.connect(self.uri, **ws_params) as websocket:
-            try:
-                while True:
-                    msg = await asyncio.wait_for(websocket.recv(), timeout = self.ws_timeout)
-                    await self.received_message(websocket, msg)
 
-            except (asyncio.exceptions.TimeoutError) as e:
-                print('gateway message timeout')
+        async with websockets.connect(self.uri, **ws_params) as socket:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(socket.recv(), timeout = self.ws_timeout)
+                    await self.received_message(socket, msg)
+
+                except asyncio.exceptions.TimeoutError as e:
+                    _log.error('[{}] gateway: receive timeout'.format(self.id))
+                    continue
+                    # break
 

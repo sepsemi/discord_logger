@@ -1,33 +1,54 @@
 class BaseUser:
     __slots__  = (
-        'name',
         'id',
+        'username',
         'discriminator',
         '_avatar',
+        '_banner',
         'bot',
         'system',
+        '_flags',
         '_public_flags',
+        '_premium_type',
         '_state'
     )
 
     def __init__(self, state, data):
         self._state = state
         self.id = int(data['id'])
-        self.name = data['username']
+        self.username = data['username']
         self.discriminator = data['discriminator']
         self._avatar = data['avatar']
-        self._public_flags = data.get('public_flags', 0)
         self.bot = data.get('bot', False)
         self.system = data.get('system', False)
+        self._banner = data.get('banner')
+        self._flags = int(data.get('flags', 0))
+        self._premium_type = int(data.get('premium_type', 0))
+        self._public_flags = int(data.get('public_flags', 0))
     
     def __repr__(self) -> str:
         return (
-            f"<BaseUser id={self.id} name={self.name!r} discriminator={self.discriminator!r}"
+            f"<BaseUser id={self.id} name={self.username!r} discriminator={self.discriminator!r}"
             f" bot={self.bot} system={self.system}>"
         )
 
+    @property
+    def json(self):
+        return {
+            'id': self.id,
+            'username': self.username,
+            'discriminator': self.discriminator,
+            'avatar': self._avatar,
+            'bot': self.bot,
+            'system': self.system,
+            'banner': self._banner,
+            'flags': self._flags,
+            'premium_type': self._premium_type,
+            'public_flags': self._public_flags
+        }
+
     def __str__(self) -> str:
-        return f'{self.name}#{self.discriminator}'
+        return f'{self.username}#{self.discriminator}'
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, _UserTag) and other.id == self.id

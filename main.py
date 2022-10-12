@@ -1,31 +1,51 @@
 import ujson
 import uvloop
 import asyncio
+import asyncpg
+import logging
+
+from src.database import DiscordDatabase
 
 import dlib
 
+with open('etc/config.json') as fp:
+    config = ujson.load(fp)
+
+
+logger = logging.getLogger('dlib')
+
+logger.setLevel(logging.DEBUG)
+
+sh = logging.StreamHandler()
+sh.setFormatter(logging.Formatter('[%(asctime)s][%(levelname)s] %(name)s - %(message)s'))
+logger.addHandler(sh)
+
+
 class DiscordClient(dlib.Client):
     async def on_ready(self):
-        print('ready() id = {}, username = {} userid = {}'.format(self.id, self.user, self.user.id)) 
+        print('[{}] ready: {}, {}'.format(self.id, self.user.id, self.user))
 
     async def on_message(self, ctx):
-        author_name = ctx.author.name.encode('unicode-escape').decode()
-        content = ctx.content.encode('unicode-escape').decode()
-        print('client_id = {}, channel_name={} author={} content = {}'.format(self.id, ctx.channel, author_name, content))
+        await self._database.insert_user(ctx.author.json)
+        print('[{}] message: {}, {}:{}, {}, {}'.format(self.id, ctx.channel.guild, ctx.channel.name, ctx.author.id, ctx.author, ctx.content))
 
 async def main(loop):
-    clients = set()
+    tasks = set()
+    database = DiscordDatabase(loop = loop, **config['database'])
+    # Create the database pool for the clients
+    await database.create_pool()
+    
     with open('etc/tokens.txt', 'r') as fp:
         for line in fp.readlines():
             client = DiscordClient(loop = loop)
+            client._database = database
             token = line.strip()
-
-            clients.add(loop.create_task(client.connect(token = token)))
+            
+            tasks.add(loop.create_task(client.connect(token = token)))
 
     # Start handling dead clients
-    await asyncio.wait(clients)
-    print('clients died')
-    
+    print('Loaded {} clients'.format(len(tasks)))
+    await asyncio.wait(tasks)
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)

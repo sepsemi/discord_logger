@@ -1,14 +1,18 @@
-
 class PrivateChannel:
 
     def __init__(self, me, state, data):
         self.type = int(data['type'])
         self.id = int(data['id'])
         self.flags = int(data['flags'])
+        self.guild = None
         self.recipients = [state._users[int(uid)] for uid in data['recipient_ids']]
 
     def __str__(self):
          return 'Direct message with {}'.format(self.recipients[0])
+
+    @property
+    def name(self):
+        return 'Direct message with {}'.format(self.recipients[0])
 
 class DMChannel:
 
@@ -31,4 +35,21 @@ class DMChannel:
         self.recipient = None
         self.me = state.user
         return self
+
+class TextChannel:
+    
+    def __init__(self, state, guild, data):
+        self.id = int(data['id'])
+        self.type = int(data['type'])
+        self.nsfs = int(data['nsfw']) if 'nsfw' in data.keys() else None
+        self.flags = int(data['flags'])
+        self.name = data['name']
+        self.topic = data['topic']
+        self.guild = guild
+        self.position = int(data['position'])
+
+        # Add the guild
+
+    def __str__(self):
+        return '{}, {}, {}, {}'.format(self.id, self.name, self.flags, self.topic)
 
