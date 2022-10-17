@@ -85,11 +85,13 @@ class ConnectionState:
 
         user_id = message.author.id
 
+
         if user_id not in self._users.keys():
             _log.debug('[{}] new user: {}, {}'.format(self.id, message.author.id, message.author))
 
             # Append user to the user store because we can't fetch the (easily)
-            self.store_user(data['author'])
+            user = self.store_user(data['author'])
+            self.dispatch('new_user', user)
 
         self.dispatch('message', message)
 

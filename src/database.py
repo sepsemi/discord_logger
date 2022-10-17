@@ -34,12 +34,27 @@ class DiscordDatabase(Database):
         Database.__init__(self, **kwargs)
         self.loop = loop
 
-    async def insert_user(self, data):
+    async def insert_user(self, ctx):
         sql = """
-            INSERT INTO users(id, username, discriminator, avatar, bot, system, banner, flags, premium_type, public_flags)
-            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            INSERT INTO users(id, username, discriminator, avatar, bot, system, public_flags)
+            VALUES($1, $2, $3, $4, $5, $6, $7)
         """
+        await self.insert(sql, (
+            ctx.id, 
+            ctx.username, 
+            ctx.discriminator,
+            ctx.avatar,
+            ctx.bot,
+            ctx.system,
+            ctx.public_flags
+        ))
 
-        await self.insert(sql, data.values())
-
+    async def insert_message(self, ctx):
+        sql = """
+            INSERT INTO messages(id, channel_id, author_id, type, mention_everyone, content)
+            VALUES($1, $2, $3, $4, $5, $6)
+        """
+        # Insert both the user and message
+        await self.insert_user(ctx.author)
+        await self.insert(sql, (ctx.id, ctx.channel.id, ctx.author.id, ctx.type, ctx.everyone, ctx.content))
         

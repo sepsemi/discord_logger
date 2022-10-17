@@ -1,7 +1,5 @@
 from .channel import TextChannel
 
-print(__name__)
-
 def factory_channel(channel_type, channel):
     if channel_type == 0:
         # Guild channel

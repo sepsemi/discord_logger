@@ -1,6 +1,7 @@
 import json
 import zlib
 import time
+import random
 import logging
 import asyncio
 import threading
@@ -36,7 +37,7 @@ class AsyncKeepaliveHandler:
         if self.latency > 10:
             _log.warn(self.behind_msg % (self.websocket.id, self.latency))
         else:
-            _log.info(self.msg % (self.websocket.id, self.websocket.sequence))
+            _log.debug(self.msg % (self.websocket.id, self.websocket.sequence))
 
     def tick(self):
         self._last_recv = time.perf_counter()
@@ -140,9 +141,8 @@ class DiscordWebsocket:
                 self.loop.create_task(self._keep_alive.run())
         
         if event == 'READY':
-            #print('client {} ready.'.format(self.id))
-            #await self.change_presence(socket)
-            await self.update_presence(socket)
+            # Update our prescence as we connect
+            await self.change_presence(socket)
 
         elif event == 'RESUMED':
             _log.debug('[{}] gateway: has resumed'.format(self.id))
@@ -155,11 +155,11 @@ class DiscordWebsocket:
         else:
             func(data)
 
-    async def update_presence(self, socket):
+    async def change_presence(self, socket):
         # The current time in miliseconds (Not precice)
         timestamp = int(time.time() * 1000 + 0.1)
         # Create an elapsed timestamp for exmaple "20 minutes"
-        elapsed = timestamp -  1200 * 1000 
+        elapsed = timestamp +  60 * 1000 * random.randint(20, 60)
 
         payload = {
             'op': self.PRESENCE,
@@ -180,26 +180,6 @@ class DiscordWebsocket:
                         'timestamps': {
                             'start': elapsed
                         }
-                    }
-                ],
-                'afk': False
-            }
-        }
-        await socket.send(json.dumps(payload))
-
-    async def change_presence(self, socket):
-        # Just here to exist and fake change_presence
-        payload = {
-            'op': 3,
-            'd': {
-                'status': 'online',
-                'since': 0,
-                'activities': [
-                    {
-                        'name': 'Custom Status',
-                        'type': 4,
-                        'state': 'Hopelessly Devoted to You',
-                        'emoji': None
                     }
                 ],
                 'afk': False

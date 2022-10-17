@@ -3,12 +3,12 @@ class BaseUser:
         'id',
         'username',
         'discriminator',
-        '_avatar',
+        'avatar',
         '_banner',
         'bot',
         'system',
         '_flags',
-        '_public_flags',
+        'public_flags',
         '_premium_type',
         '_state'
     )
@@ -18,13 +18,13 @@ class BaseUser:
         self.id = int(data['id'])
         self.username = data['username']
         self.discriminator = data['discriminator']
-        self._avatar = data['avatar']
+        self.avatar = data['avatar']
         self.bot = data.get('bot', False)
         self.system = data.get('system', False)
         self._banner = data.get('banner')
         self._flags = int(data.get('flags', 0))
         self._premium_type = int(data.get('premium_type', 0))
-        self._public_flags = int(data.get('public_flags', 0))
+        self.public_flags = int(data.get('public_flags', 0))
     
     def __repr__(self) -> str:
         return (
