@@ -2,10 +2,15 @@ import time
 import logging
 import asyncio
 
+from .device import create_devices
+
 from .state import ConnectionState
 from .gateway import DiscordWebsocket
 
 _log = logging.getLogger(__name__)
+
+DEVICES = create_devices()
+
 
 class Client:
     
@@ -24,6 +29,7 @@ class Client:
             http = None,
             loop = self.loop
         ) 
+        self._device = DEVICES.pop(0)
 
     async def _run_event(self, coro, event_name, *args, **kwargs):
         await coro(*args, **kwargs)
@@ -49,15 +55,17 @@ class Client:
         
         # Add the id to State
         self._connection.id = self.id
+        ws = DiscordWebsocket(client = self, loop = self.loop)
 
         while not self._reconnects == self.max_reconnects:
-            ws = DiscordWebsocket(client = self, loop = self.loop)
-            
-            # Run forever untill reconnect
-            try:
+            # Run forever untill max reconnects
+            if self._reconnects > 0:
+                # Start client with resume
+                _log.warning('[{}] client: reconnected: {} times'.format(self.id, self._reconnects + 1))
                 await ws.long_poll()
-            except asyncio.exceptions.TimeoutError:
-                logging.warn('Internet connection lost')
+
+            else:
+                await ws.long_poll()
 
             # Connection was reset
             self._reconnects +=1

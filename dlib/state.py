@@ -14,6 +14,8 @@ class ConnectionState:
         self.http = http
         self.dispatch = dispatch
         self.max_messages = 1000
+        # Set the abs() max heartbeat timeout
+        self.heartbeat_timeout = 60.0
 
         # Storing
         self._users = {}
