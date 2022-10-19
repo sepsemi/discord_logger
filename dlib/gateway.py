@@ -268,4 +268,4 @@ class DiscordWebsocket:
                 except asyncio.exceptions.TimeoutError as e:
                     _log.error('[{}] gateway: receive timeout'.format(self.id))
                     self.clean()
-                    break # No point in proceeding close connection by client handler
+                    break # No point in proceeding, close connection by client handler
