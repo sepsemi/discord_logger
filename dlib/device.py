@@ -41,7 +41,7 @@ def create_device():
 		'release_channel': 'stable',
 		'client_build_number': build_number,
 		'client_event_source': None
-	}
+	} 
 
 def create_devices():
     # Create A number of possible combinations of devices to mimic more of discord
