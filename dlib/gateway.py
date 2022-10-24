@@ -11,10 +11,17 @@ from .utils import minutes_elapsed_timestamp, to_json, from_json
 
 _log = logging.getLogger(__name__)
 
+class ReconnectWebSocket(Exception):
+    
+    def __init__(self, resume = True):
+        self.resume = resume
+        self.op = 'RESUME' if resume else 'IDENTIFY'
+
 class AsyncKeepaliveHandler:
     WINDOW = 2.0
 
     def __init__(self, websocket, interval, socket):
+        self.open = False
         self.websocket = websocket
         self.interval = interval
         self.socket = socket
@@ -52,10 +59,11 @@ class AsyncKeepaliveHandler:
         }
 
     async def run(self):
-        while True:
+        self.open = True
+
+        while self.open:
             if self._last_recv + self.heartbeat_timeout < time.perf_counter():
                 _log.warn('[{}] keepalive: has stopped responding to gateway, closing'.format(self.id))
-                self.websocket.is_closed = True
                 return None
 
             data = self.get_payload()
@@ -65,11 +73,13 @@ class AsyncKeepaliveHandler:
                 await asyncio.wait_for(self.socket.send(to_json(data)), timeout=self.WINDOW)
                 self._last_send = time.perf_counter()
 
-            except (asyncio.exceptions.TimeoutError, websockets.exceptions.ConnectionClosedOK):
-                self.websocket.is_closed = True
+            except asyncio.exceptions.TimeoutError:
                 _log.warn('[{}] keepalive: error, closing connection'.format(self.id))
-                return None
 
+                # We can't really close it in here since we need to raise an exception
+                self.websocket.close_from_keep_alive()
+                return None
+            
             await asyncio.sleep(self.interval - self.WINDOW)
 
 class DiscordWebsocket:
@@ -87,7 +97,7 @@ class DiscordWebsocket:
     HEARTBEAT_ACK = 11
     GUILD_SYNC = 12   
 
-    def __init__(self, loop, client):
+    def __init__(self, loop, client, **params):
         self.loop = loop
         self.id = client.id
         self.token = client.token
@@ -100,9 +110,12 @@ class DiscordWebsocket:
 
         # ws related stuff
         self._keep_alive = None
-        self.is_closed = False
-        self.session_id = None
-        self.sequence = None
+
+        # Updatables
+        self.session_id = params.get('session_id', None)
+        self.sequence = params.get('session_id', None)
+        self.resume_set = params.get('resume', False)
+
         self._max_heartbeat_timeout = client._connection.heartbeat_timeout
         self._zlib = zlib.decompressobj()
         self._buffer = bytearray()
@@ -111,7 +124,6 @@ class DiscordWebsocket:
     def clean(self):
         # Clean up after ourselfs
         self._keep_alive = None
-        self.is_closed = False
         self.session_id = None
         self.sequence = None
         self._zlib = bytearray()
@@ -143,38 +155,49 @@ class DiscordWebsocket:
  
         if op != self.DISPATCH:
             if op == self.RECONNECT:
-                # We just treat it as a lazy close and reconnect
-                # Keepalive will die, eventually..
-                
-                self.is_closed = True
                 _log.debug('[{}] gateway: Asked for reconnect'.format(self.id))
+                self._keep_alive.open = False
+                raise ReconnectWebSocket()
 
             if op == self.HEARTBEAT_ACK:            
-                self._keep_alive.ack()
+                if self._keep_alive:
+                    self._keep_alive.ack()
+                return None
 
             if op == self.HEARTBEAT:
                 await self._keep_alive.send_heartbeat(self.id)    
                 _log.debug('[{}] gateway: Request forcefull hearbeat send'.format(self.id))
+                return None
             
             if op == self.HELLO:
                 interval = data['heartbeat_interval'] / 1000.0
-
-                # Send identify
-                await self.identify(socket)
+                
+                if not self.resume_set:
+                    # Send identify
+                    await self.identify(socket)
+                else:
+                    await ws.resume()
                  
                 self._keep_alive = AsyncKeepaliveHandler(websocket=self, interval=interval, socket=socket)
                 self.loop.create_task(self._keep_alive.run())
             
             if op == self.INVALIDATE_SESSION:
-                _log.info('[{}] gateway: Invalidated session'.format(self.id))
-
+                if data is True:
+                    raise ReconnectWebSocket()
+                    
                 # Set to null
                 self.sequence = None
-                self.session_id = None     
+                self.session_id = None
                 
-                # Signal close (Lazy)
-                self.is_closed = True
-        
+                # Close keepalive
+                self._keep_alive.open = False
+
+                _log.info('[{}] gateway: Invalidated session'.format(self.id))
+                raise ReconnectWebSocket(resume=False)
+            
+            # End of op processing
+            return None
+ 
         if event == 'READY':
             # Update our prescence as we connect
             await self.change_presence(socket)
@@ -190,22 +213,23 @@ class DiscordWebsocket:
         else:
             func(data)
 
+    def close_from_keep_alive(self):
+        # Yeah i can't care more anymore.
+        try:
+            raise ReconnectWebSocket()
+        # Funny we are raising anod now we need to close
+        except ReconnectWebSocket:
+            pass
+
     async def change_presence(self, socket):
         # Create an elapsed timestamp for exmaple "20-60 minutes"
-        elapsed = minutes_elapsed_timestamp(random.randint(20,60))
-
+        elapsed = minutes_elapsed_timestamp(0)
         payload = {
             'op': self.PRESENCE,
             'd': {
-                'status': 'online',
+                'status': 'idle',
                 'since': None,
                 'activities': [
-                    {
-                        'name': 'Custom Status',
-                        'type': 4,
-                        'state': 'Hopelessly Devoted to You',
-                        'emoji': None
-                    },
                     {   
                         'name': 'Hearts of Iron IV',
                         'type': 0,
@@ -216,6 +240,17 @@ class DiscordWebsocket:
                     }
                 ],
                 'afk': False
+            }
+        }
+        await socket.send(to_json(payload))
+
+    async def resume(self):
+        payload = {
+            'op': self.RESUME,
+            'd': {
+                'seq': self.sequence,
+                'session_id': self.session_id,
+                'token': self.token
             }
         }
         await socket.send(to_json(payload))
@@ -243,7 +278,7 @@ class DiscordWebsocket:
 
         # Set presence
         payload['d']['presence'] = {
-            'status': 'online',
+            'status': 'idle',
             'since': 0,
             'activities': [],
             'afk': False
@@ -251,21 +286,10 @@ class DiscordWebsocket:
         
         await socket.send(to_json(payload))
 
-    async def long_poll(self, resume = False):
-        size = 1024 * 1024 * 2.5
-        ws_params = {
-            'max_size': size,
-            'read_limit': size,
-            'write_limit': size
-        }
+    async def poll_event(self, sock):
+        try:
+            msg = await asyncio.wait_for(sock.recv(), timeout = self._max_heartbeat_timeout)
+            await self.received_message(sock, msg)
 
-        async with websockets.connect(self.uri, **ws_params) as socket:
-            while not self.is_closed:
-                try:
-                    msg = await asyncio.wait_for(socket.recv(), timeout = self._max_heartbeat_timeout)
-                    await self.received_message(socket, msg)
-
-                except asyncio.exceptions.TimeoutError as e:
-                    _log.error('[{}] gateway: receive timeout'.format(self.id))
-                    self.clean()
-                    break # No point in proceeding, close connection by client handler
+        except asyncio.exceptions.TimeoutError as e:
+            _log.error('[{}] gateway: receive timeout'.format(self.id))

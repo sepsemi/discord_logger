@@ -23,25 +23,25 @@ class DiscordClient(dlib.Client):
         print('[{}] ready: {}, {}'.format(self.id, self.user.id, self.user))
 
     async def on_new_user(self, ctx):
-        await self._database.insert_user(ctx) 
+        pass
+        #await self._database.insert_user(ctx) 
 
     async def on_message(self, ctx):
-        await self._database.insert_message(ctx)
+        #await self._database.insert_message(ctx)
         print('[{}] message: {}, {}, {}:{}, {}, {}'.format(self.id, ctx.created_at, ctx.channel.guild, ctx.channel.name, ctx.author.id, ctx.author, ctx.content))
 
 async def main(loop):
     tasks = set()
-    database = DiscordDatabase(loop = loop, **config['database'])
+    #database = DiscordDatabase(loop = loop, **config['database'])
 
     # Create the database pool for the clients
-    await database.create_pool()
+    #await database.create_pool()
     with open('etc/tokens.txt', 'r') as fp:
         for line in fp.readlines():
-            client = DiscordClient(loop = loop)
-            client._database = database
-            token = line.strip()
+            client = DiscordClient(loop=loop, token=line.strip())
+            #client._database = database
 
-            tasks.add(loop.create_task(client.connect(token = token)))
+            tasks.add(loop.create_task(client.connect()))
 
     # Start handling dead clients
     print('Loaded {} clients'.format(len(tasks)))

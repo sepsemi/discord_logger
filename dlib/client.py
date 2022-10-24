@@ -1,11 +1,13 @@
 import time
 import logging
 import asyncio
+import websockets
 
 from .device import create_devices
 
+from .backoff import ExponentialBackoff
 from .state import ConnectionState
-from .gateway import DiscordWebsocket
+from .gateway import DiscordWebsocket, ReconnectWebSocket
 
 _log = logging.getLogger(__name__)
 
@@ -14,13 +16,15 @@ DEVICES = create_devices()
 
 class Client:
     
-    def __init__(self, loop, max_reconnects = 10):
+    def __init__(self, loop, token):
         self.loop = loop
+        self.token = token
+        self.id = token[:16]
         self.ws = None
         self.http = None
         self._listeners = {}
         self._closed = False
-        self.max_reconnects = max_reconnects
+        self.max_reconnects = 10
         self._reconnects = 0
 
         # Instantiate the state manager
@@ -28,7 +32,11 @@ class Client:
             dispatch = self.dispatch,
             http = None,
             loop = self.loop
-        ) 
+        )
+        # Late to the game i guess?
+        self._connection.id = self.id
+
+        # Fetch a device from the poo
         self._device = DEVICES.pop(0)
 
     async def _run_event(self, coro, event_name, *args, **kwargs):
@@ -45,31 +53,42 @@ class Client:
         coro = getattr(self, method)
 
         self._schedule_event(coro, method, *args, **kwargs)
+    
+    @property
+    def _ws_client_params(self):
+        size = 1024 * 1024 * 2.5
 
-    async def connect(self, token, reconnect = True):
-        self.id = token[:18]
-        self.token = token
+        return {
+            'max_size': size,
+            'read_limit': size,
+            'write_limit': size
+        }
+
+    async def connect(self):
+        backoff = ExponentialBackoff()
+
         ws_params = {
-            'initial': True
-        } 
-        
-        # Add the id to State
-        self._connection.id = self.id
-        ws = DiscordWebsocket(client = self, loop = self.loop)
-
+            'initial': True,
+        }
         while not self._reconnects == self.max_reconnects:
             # Run forever untill max reconnects
-            if self._reconnects > 0:
-                # Start client with resume
-                _log.warning('[{}] client: reconnected: {} times'.format(self.id, self._reconnects + 1))
-                await ws.long_poll()
+            ws = DiscordWebsocket(client=self,loop = self.loop, params=ws_params)
 
-            else:
-                await ws.long_poll()
+            async with websockets.connect(ws.uri, **self._ws_client_params) as sock:
+                while True:
+                    try:
+                        await ws.poll_event(sock) 
+                    except ReconnectWebSocket as e:
+                        _log.debug('[{}] gateway: got a request to {}'.format(self.id, e.op.lower()))
+                        ws_params.update(sequence=ws.sequence, resume=e.resume, session=ws.session_id)
+                        break # We exit the main dataflow and create a new connection
 
-            # Connection was reset
-            self._reconnects +=1
-    
+                self._reconnects+=1
+                retry = backoff.delay()
+
+                _log.info("Attempting a reconnect in %.2fs", retry)
+                await asyncio.sleep(retry)
+
     def event(self, coro):
         setattr(self, coro.__name__, coro)
         _log.debug('%s has successfully been registered as an event', coro.__name__)    
